@@ -1,15 +1,1 @@
-const CACHE='sseujago-v13';
-const ASSETS=['./','./index.html','./photo-import.html','./dashboard.html','./guide.html','./manifest.webmanifest','./icon.svg','./safety-features.js','./app-ui-v2.js'];
-self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).catch(()=>{}));});
-self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));});
-self.addEventListener('fetch',event=>{
-  if(event.request.method!=='GET') return;
-  if(event.request.mode==='navigate'){
-    event.respondWith(fetch(event.request).catch(()=>caches.match('./index.html')));
-    return;
-  }
-  event.respondWith(fetch(event.request).then(response=>{
-    if(response&&response.ok){const copy=response.clone();caches.open(CACHE).then(cache=>cache.put(event.request,copy));}
-    return response;
-  }).catch(()=>caches.match(event.request)));
-});
+const CACHE='sseujago-v14';const ASSETS=['./','./index.html','./photo-import.html','./dashboard.html','./guide.html','./manifest.webmanifest','./icon.svg','./safety-features.js','./app-ui-v2.js'];self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});self.addEventListener('activate',e=>{e.waitUntil(Promise.all([caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()]))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{if(r&&r.ok){const x=r.clone();caches.open(CACHE).then(c=>c.put(e.request,x))}return r}).catch(()=>caches.match(e.request).then(r=>r||(e.request.mode==='navigate'?caches.match('./index.html'):undefined))))});
