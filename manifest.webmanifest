@@ -1,12 +1,12 @@
 {
-  "name": "버리기 전에 쓰자",
-  "short_name": "버리기전에쓰자",
-  "description": "화장품 재고와 유통기한을 간편하게 관리하는 앱",
+  "name": "쓰자고",
+  "short_name": "쓰자고",
+  "description": "또 버리지 말고 제발 쓰자고!! 화장품 재고와 유통기한을 간편하게 관리하는 앱",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f7f9",
-  "theme_color": "#17233c",
+  "background_color": "#FBFBFD",
+  "theme_color": "#5B4885",
   "lang": "ko",
   "icons": [{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
 }
