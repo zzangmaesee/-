@@ -14,5 +14,10 @@
   };
   intro.addEventListener("pointerup",close,{once:true});
   const reduced=window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  window.setTimeout(close,reduced?800:2000);
+  const start=()=>{
+    intro.classList.add("ready");
+    window.setTimeout(close,reduced?800:2000);
+  };
+  if(document.fonts?.ready)document.fonts.ready.then(start,start);
+  else start();
 })();
