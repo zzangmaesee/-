@@ -1,10 +1,6 @@
 (()=>{"use strict";
   const intro=document.getElementById("appIntro");
   if(!intro)return;
-  let seen=false;
-  try{seen=sessionStorage.getItem("sseujago-intro-seen")==="1"}catch{}
-  if(seen){intro.remove();return}
-  try{sessionStorage.setItem("sseujago-intro-seen","1")}catch{}
   let closing=false;
   const close=()=>{
     if(closing)return;
