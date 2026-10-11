@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffffff"><script src="config.js?v=50"></script><script src="nav.js?v=50"></script><script src="sj-dialog.js?v=50"></script><link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png?v=33"><link rel="manifest" href="manifest.webmanifest"><title>개인정보처리방침 · 쓰자고</title><link rel="stylesheet" href="intro.css">
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffffff"><script src="config.js?v=51"></script><script src="nav.js?v=51"></script><script src="sj-dialog.js?v=51"></script><link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png?v=33"><link rel="manifest" href="manifest.webmanifest"><title>개인정보처리방침 · 쓰자고</title><link rel="stylesheet" href="intro.css">
 <style>
 :root{--p:#5B4885;--ink:#2b2540;--muted:#827B8F;--line:#ECE8F1}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}*{box-sizing:border-box}
@@ -41,7 +41,7 @@ th{background:#FAF8FD;color:var(--p);font-weight:800}
 <table><thead><tr><th style="width:24%">구분</th><th style="width:40%">항목</th><th>목적</th></tr></thead><tbody>
 <tr><td>찍자고(AI 사진 인식)</td><td>이용자가 고른 사진(긴 변 1024px로 줄이고 위치 등 메타데이터 제거), 기기 ID</td><td>사진 속 제품명·브랜드·용량·수량 인식</td></tr>
 <tr><td>쓰자팁</td><td>기기 ID, 쓰자팁 잔액, 적립·사용 내역(최근 50건), 출석 날짜</td><td>쓰자팁 적립·사용, 주간 출석 현황 표시</td></tr>
-<tr><td>부정 이용 방지</td><td>인터넷 주소(IP)를 그대로 저장하지 않고 변환한 값(해시)과 하루 지급 횟수</td><td>처음 사용 쓰자팁의 반복 수령 방지</td></tr>
+<tr><td>부정 이용 방지</td><td>인터넷 주소(IP)를 그대로 저장하지 않고 변환한 값(해시)과 하루 지급 횟수, 처음 사용 시 자동 사람 확인(Cloudflare Turnstile) 결과</td><td>처음 사용 쓰자팁의 반복 수령·자동 프로그램(봇) 남용 방지</td></tr>
 <tr><td>서비스 운영 기록</td><td>접속 시각, 요청 주소, 오류 종류(서버 제공업체가 자동 생성)</td><td>오류 확인·보안</td></tr>
 </tbody></table>
 <p>재고 정보(제품명·수량·유통기한·보관 위치·메모)와 제품 사진은 이용자의 폰(브라우저 저장소)에만 저장되며 운영자가 볼 수 없어요.</p>
@@ -60,7 +60,7 @@ th{background:#FAF8FD;color:var(--p);font-weight:800}
 <p>쓰자고는 서버를 직접 운영하지 않고 아래 업체의 서비스를 이용해요. 정보는 인터넷을 통해 해당 국가의 서버로 전송돼요.</p>
 <table><thead><tr><th style="width:28%">받는 곳(국가)</th><th style="width:36%">이전 항목·시기</th><th>목적·보유</th></tr></thead><tbody>
 <tr><td>Google LLC (미국)</td><td>찍자고 사진 — 찍자고 사용 시마다</td><td>AI 제품 인식(Gemini API). 쓰자고는 유료 API 조건으로 이용하며, 해당 조건에서 Google은 입력 사진을 AI 학습에 쓰지 않아요.</td></tr>
-<tr><td>Cloudflare, Inc. (미국 및 전 세계 데이터센터)</td><td>1장의 모든 서버 처리 항목 — 앱 이용 시마다</td><td>앱 화면 제공, 찍자고 요청 전달, 쓰자팁 저장. 보유 기간은 2장과 같아요.</td></tr>
+<tr><td>Cloudflare, Inc. (미국 및 전 세계 데이터센터)</td><td>1장의 모든 서버 처리 항목 — 앱 이용 시마다</td><td>앱 화면 제공, 찍자고 요청 전달, 쓰자팁 저장, 처음 사용 시 자동 사람 확인(Turnstile — 브라우저·기기 정보를 확인하고 쓰자고에는 통과 여부만 전달). 보유 기간은 2장과 같아요.</td></tr>
 </tbody></table>
 <p><b>거부 방법과 불이익:</b> 찍자고를 쓰지 않으면 사진이 전송되지 않아요. 이 경우에도 적자고(직접 입력)와 기기 안 문자 인식으로 제품을 등록할 수 있어요.</p>
 

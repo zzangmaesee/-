@@ -77,14 +77,15 @@
     var ac = new AbortController();
     var timer = setTimeout(function () { ac.abort(); }, TIMEOUT_MS);
     try {
-      var res = await fetch(base + "/recognize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId: deviceId(), image: image, mime: "image/jpeg", categories: opts.categories }),
-        signal: ac.signal
+      var out = await withHuman(function (ts) {
+        return fetch(base + "/recognize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: deviceId(), image: image, mime: "image/jpeg", categories: opts.categories, ts: ts || undefined }),
+          signal: ac.signal
+        });
       });
-      var j = null;
-      try { j = await res.json(); } catch (e) {}
+      var res = out.res, j = out.json;
       if (!j || typeof j !== "object") return failResult("BAD_RESPONSE", "AI 인식 응답을 읽지 못했습니다.");
       if (!res.ok || !j.ok) return failResult(j.code || "HTTP_" + res.status, j.message || "찍자고 인식에 실패했습니다.", { remaining: j.remaining, balance: j.balance, photos: j.photos, cost: j.cost });
       var items = (Array.isArray(j.items) ? j.items : []).filter(function (it) {
@@ -112,22 +113,69 @@
   }
 
   // 쓰자팁 지갑: 잔액 조회(처음이면 서버가 환영 쓰자팁 지급) / 하루 출석
+  /* ---------- 봇 차단(Cloudflare Turnstile): 처음 쓰자팁 지갑을 만들 때 한 번만 ---------- */
+  var WALLET_OK = "sj-wallet-ok", tsLoading = null;
+  function siteKey() { return (window.SJ_CONFIG || {}).turnstileSiteKey || ""; }
+  function walletKnown() { try { return localStorage.getItem(WALLET_OK) === "1"; } catch (e) { return false; } }
+  function markWallet() { try { localStorage.setItem(WALLET_OK, "1"); } catch (e) {} }
+  function loadTurnstile() {
+    if (window.turnstile) return Promise.resolve();
+    if (!tsLoading) tsLoading = new Promise(function (res, rej) {
+      var sc = document.createElement("script");
+      sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      sc.async = true; sc.onload = res; sc.onerror = function () { tsLoading = null; rej(new Error("ts-load")); };
+      document.head.appendChild(sc);
+    });
+    return tsLoading;
+  }
+  // 사람 확인 토큰 받기(보통 화면에 아무것도 보이지 않음. 의심스러울 때만 체크 상자 표시)
+  async function humanToken() {
+    if (!siteKey()) return "";
+    try { await loadTurnstile(); } catch (e) { return ""; }
+    return new Promise(function (res) {
+      var box = document.createElement("div");
+      box.style.cssText = "position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:3000";
+      document.body.appendChild(box);
+      var done = function (t) { clearTimeout(timer); try { window.turnstile.remove(wid); } catch (e) {} box.remove(); res(t || ""); };
+      var timer = setTimeout(function () { done(""); }, 20000);
+      var wid = window.turnstile.render(box, {
+        sitekey: siteKey(), appearance: "interaction-only", language: "ko",
+        callback: function (t) { done(t); }, "error-callback": function () { done(""); }, "expired-callback": function () { done(""); }
+      });
+    });
+  }
+  // 처음 사용이면 토큰을 붙여 요청, '사람 확인 필요'가 오면 토큰을 새로 받아 한 번 다시 시도
+  async function withHuman(send) {
+    var ts = walletKnown() ? "" : await humanToken();
+    var r = await send(ts), j = null;
+    try { j = await r.json(); } catch (e) {}
+    if (j && j.code === "HUMAN_CHECK") {
+      ts = await humanToken();
+      r = await send(ts);
+      try { j = await r.json(); } catch (e) { j = null; }
+    }
+    if (j && (j.ok || typeof j.balance === "number")) markWallet();
+    return { res: r, json: j };
+  }
+
   async function wallet(withLog) {
     var base = endpoint();
     if (!base || !navigator.onLine) return null;
     try {
-      var r = await fetch(base + "/wallet?deviceId=" + encodeURIComponent(deviceId()) + (withLog ? "&log=1" : ""));
-      var j = await r.json();
-      return j && j.ok ? j : null;
+      var out = await withHuman(function (ts) {
+        return fetch(base + "/wallet?deviceId=" + encodeURIComponent(deviceId()) + (withLog ? "&log=1" : "") + (ts ? "&ts=" + encodeURIComponent(ts) : ""));
+      });
+      return out.json && out.json.ok ? out.json : null;
     } catch (e) { return null; }
   }
   async function attend() {
     var base = endpoint();
     if (!base || !navigator.onLine) return null;
     try {
-      var r = await fetch(base + "/attend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: deviceId() }) });
-      var j = await r.json();
-      return j && j.ok ? j : null;
+      var out = await withHuman(function (ts) {
+        return fetch(base + "/attend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: deviceId(), ts: ts || undefined }) });
+      });
+      return out.json && out.json.ok ? out.json : null;
     } catch (e) { return null; }
   }
   // 백업·복원용: 쓰자팁 지갑은 기기 ID에 묶여 있어 복원 시 함께 옮깁니다

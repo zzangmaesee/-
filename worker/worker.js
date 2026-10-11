@@ -15,6 +15,7 @@
  *
  * 필요한 Cloudflare 설정
  *  - Secret  GEMINI_API_KEY : Google AI Studio 키
+ *  - Secret  TURNSTILE_SECRET : Cloudflare Turnstile 비밀 키(봇 차단, 새 지갑 만들 때만 확인)
  *  - KV 바인딩 USAGE         : 저장소(SJ_USAGE)
  *  - (선택) 일반 변수 — 없으면 아래 DEFAULTS 사용
  *
@@ -26,7 +27,7 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
@@ -42,7 +43,7 @@ const DEFAULTS = {
   USD_KRW: 1450,               // 환율(보수적으로 높게)
   THINKING_LEVEL: "low",       // 빈칸이면 설정 안 함
   // 쉼표로 구분. 3단계 링크 배포 때 실제 주소만 남기도록 좁힙니다.
-  ALLOWED_ORIGINS: "http://localhost,http://127.0.0.1,https://sseujago.pages.dev"
+  ALLOWED_ORIGINS: "https://sseujago.pages.dev"
 };
 
 const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024;   // 디코딩 후 1.5MB (앱이 긴 변 1024px로 줄여서 보냄)
@@ -75,6 +76,7 @@ export default {
       if (url.pathname === "/recognize" && request.method === "POST") return await recognize(request, env, cfg, cors);
       return fail(404, "NOT_FOUND", "없는 주소입니다.", cors);
     } catch (e) {
+      if (e instanceof NeedHuman) return fail(403, "HUMAN_CHECK", "처음 사용 확인에 실패했어요. 앱을 다시 열어 주세요.", cors);
       // 사진·응답 원문은 남기지 않고 오류 종류만 기록
       console.error("unhandled", e && e.name);
       return fail(500, "SERVER_ERROR", "잠시 후 다시 시도해 주세요.", cors);
@@ -187,13 +189,33 @@ async function saveWallet(env, id, w, delta, reason) {
 }
 
 // 지갑이 없으면 만들고 환영 쓰자팁 지급(같은 인터넷 주소 하루 지급 수 제한)
-async function ensureWallet(request, env, cfg, id) {
+class NeedHuman extends Error {}
+
+// 봇 차단: 새 지갑(환영 쓰자팁)을 만들 때만 Cloudflare Turnstile 토큰 확인
+// TURNSTILE_SECRET(Secret)이 없으면 확인하지 않음(설정 전 호환)
+async function verifyTurnstile(request, env, token) {
+  if (!env.TURNSTILE_SECRET) return true;
+  if (!token || typeof token !== "string" || token.length > 4096) return false;
+  const form = new FormData();
+  form.append("secret", env.TURNSTILE_SECRET);
+  form.append("response", token);
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (ip) form.append("remoteip", ip);
+  try {
+    const r = await fetchWithTimeout("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body: form }, 8000);
+    const j = await r.json();
+    return !!(j && j.success);
+  } catch { return false; }
+}
+
+async function ensureWallet(request, env, cfg, id, token) {
   let w = await loadWallet(env, id);
   if (w) {
     const gone = expireLots(w);
     if (gone > 0) await saveWallet(env, id, w, -gone, "유효기간 만료(적립 후 1년)");
     return { w, welcome: 0, limited: false };
   }
+  if (!(await verifyTurnstile(request, env, token))) throw new NeedHuman();
   const { day } = kstParts();
   // 인터넷 주소(IP)는 그대로 저장하지 않고 날짜를 섞은 해시(앞 16자)로만 사용 — 2일 뒤 자동 삭제
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -233,7 +255,7 @@ async function weekStatus(env, id) {
 async function walletInfo(request, url, env, cfg, cors) {
   const id = url.searchParams.get("deviceId") || "";
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
-  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
+  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id, url.searchParams.get("ts"));
   const ws = await weekStatus(env, id);
   let log = [];
   if (url.searchParams.get("log") === "1") {
@@ -250,7 +272,7 @@ async function attend(request, env, cfg, cors) {
   try { body = await request.json(); } catch { return fail(400, "BAD_JSON", "요청 형식이 올바르지 않습니다.", cors); }
   const id = String((body && body.deviceId) || "");
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
-  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
+  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id, body && body.ts);
   let ws = await weekStatus(env, id);
   const base = { ok: true, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips, nextExpiry: nextExpiry(w) };
   if (ws.week[ws.todayIdx].attended) {
@@ -274,6 +296,7 @@ async function health(url, env, cfg, cors) {
     version: VERSION,
     model: cfg.model,
     keySet: typeof env.GEMINI_API_KEY === "string" && env.GEMINI_API_KEY.length > 10,
+    botCheck: !!env.TURNSTILE_SECRET,
     kvBound: !!env.USAGE,
     tips: { welcome: cfg.welcome, attend: cfg.attendTips, streak: cfg.streakTips, cost: cfg.cost },
     monthlyKrwCap: cfg.monthlyKrwCap
@@ -307,7 +330,7 @@ async function health(url, env, cfg, cors) {
 async function quota(request, url, env, cfg, cors) {
   const id = url.searchParams.get("deviceId") || "";
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
-  const { w } = await ensureWallet(request, env, cfg, id);
+  const { w } = await ensureWallet(request, env, cfg, id, url.searchParams.get("ts"));
   const photos = Math.floor(w.b / cfg.cost);
   return json({ ok: true, remaining: photos, limit: photos, balance: w.b }, 200, cors);
 }
@@ -349,7 +372,7 @@ async function recognize(request, env, cfg, cors) {
   if (costUsed >= cfg.monthlyKrwCap) return fail(429, "MONTHLY_CAP", "이번 달 찍자고 사용량이 모두 소진되어 잠시 중지되었습니다. 적자고(직접 입력)를 이용해 주세요.", cors);
   if (allUsed >= cfg.globalDailyCap) return fail(429, "GLOBAL_CAP", "오늘은 찍자고 요청이 많아 잠시 중지되었습니다. 적자고(직접 입력)를 이용해 주세요.", cors);
 
-  const { w } = await ensureWallet(request, env, cfg, deviceId);
+  const { w } = await ensureWallet(request, env, cfg, deviceId, body.ts);
   if (w.b < cfg.cost) {
     return fail(402, "NO_TIPS", `쓰자팁이 부족해요. 찍자고 사진 1장에 ${cfg.cost} 쓰자팁이 필요해요.`, cors, { balance: w.b, cost: cfg.cost, photos: 0, remaining: 0 });
   }

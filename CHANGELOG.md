@@ -2,6 +2,15 @@
 
 > 2026-10-11에 프로젝트 배포로드맵과 저장소 기록을 바탕으로 다시 작성한 문서입니다. 원본 v1.0.1~v1.0.3 CHANGELOG는 업로드 때 빠졌습니다. 그래서 버전별 세부 기록(원인·범위·검증 결과)은 원본 파일을 받으면 보완합니다.
 
+## 1.1.5 — 봇 차단(Cloudflare Turnstile) 준비 + 허용 주소 정리 (2026-10-12, 3단계 ③)
+- 방식: **새 쓰자팁 지갑을 만들 때(처음 사용 +50 지급)만** 사람 확인. 이미 지갑이 있는 기기는 확인 없음 → 일반 사용자는 화면 변화 없음(의심스러울 때만 체크 상자 표시)
+- 앱(ai-recognize.js): 처음 사용 시 Turnstile 스크립트를 필요할 때만 불러와 토큰을 받아 함께 전송, 서버가 '사람 확인 필요'(HUMAN_CHECK)면 1회 재시도, 성공 후 `sj-wallet-ok` 저장
+- config.js: `turnstileSiteKey`(공개 사이트 키, 비어 있으면 확인 안 함)
+- Worker 2.3.0: Secret `TURNSTILE_SECRET` 있으면 새 지갑 생성 전 siteverify 확인(없으면 기존처럼 동작), 허용 주소를 `https://sseujago.pages.dev` 하나로 좁힘(localhost 제거), /health에 botCheck 표시
+- 개인정보처리방침: 부정 이용 방지·Cloudflare 위탁 항목에 Turnstile 사람 확인 추가
+- 적용 순서(중요): ① 앱에 사이트 키 반영 → ② Worker에 Secret 등록 + 2.3.0 붙여넣기 (반대로 하면 새 사용자가 쓰자팁을 못 받음)
+- 버전: 1.1.5, 캐시 sseujago-v51 / 검증: Worker 단위(토큰 없음·틀림 403, 맞음 생성, 기존 지갑 토큰 불필요, 다른 주소 403, Secret 없으면 기존 동작), 앱 연동(처음 실행 시 1회 확인 후 환영 지급, 두 번째 실행은 확인 없음), 전체 시험 재통과, 오류 0건
+
 ## 1.1.4 — 문의 메일 등록 (2026-10-12)
 - 개인정보처리방침 문의·보호책임자 연락처: sseujago.help@gmail.com (config.js contactEmail)
 - 버전: 1.1.4, 캐시 sseujago-v50

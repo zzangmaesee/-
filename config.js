@@ -14,13 +14,15 @@
   var cfg = {
     target: target,
     adsEnabled: false,
-    appVersion: "1.1.4",
+    appVersion: "1.1.5",
     dataVersion: 2,
     // 광고를 절대 넣지 않는 화면(재고 확인·수정·백업 등 핵심 기능 보호)
     adFreeScreens: ["inventory", "edit", "settings", "backup"],
     // 문의·개인정보 보호 연락처(공개 정보, 비밀값 아님). 앱 전용 메일을 만들면 여기에 입력
     contactEmail: "sseujago.help@gmail.com",
     policyDate: "2026-10-12",
+    // 봇 차단(Cloudflare Turnstile) 사이트 키 — 공개용 값(비밀 아님). 비밀 키는 Worker Secret에만
+    turnstileSiteKey: "",
     ai: {
       endpoint: "https://sseujago.zzangmaesee.workers.dev",   // AI 인식 Worker 주소(비밀값 아님, 키는 Worker에만 있음)
       dailyLimit: 3
