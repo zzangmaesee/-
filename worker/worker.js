@@ -25,7 +25,7 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.1.0";
+const VERSION = "2.1.1";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
@@ -152,8 +152,9 @@ async function ensureWallet(request, env, cfg, id) {
   let w = await loadWallet(env, id);
   if (w) return { w, welcome: 0, limited: false };
   const { day } = kstParts();
+  // 인터넷 주소(IP)는 그대로 저장하지 않고 날짜를 섞은 해시(앞 16자)로만 사용 — 2일 뒤 자동 삭제
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-  const ipKey = `ipnew:${day}:${ip}`;
+  const ipKey = `ipnew:${day}:${await sha16(day + "|" + ip)}`;
   const ipCount = Number(await env.USAGE.get(ipKey)) || 0;
   const limited = ipCount >= cfg.newPerIp;
   const welcome = limited ? 0 : cfg.welcome;
@@ -484,6 +485,11 @@ function estimateKrw(u, cfg) {
 }
 
 /* ---------------- 공통 ---------------- */
+
+async function sha16(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 function validDeviceId(id) {
   return /^[A-Za-z0-9-]{16,64}$/.test(id);
