@@ -10,6 +10,7 @@
  *  - 처음 사용: 50 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
  *  - 출석(앱 접속): 하루 1회 1 쓰자팁, 일요일에 월~일 7일 연속이면 10 쓰자팁(한국 시간 자정 기준)
  *  - 찍자고 사진 1장: 10 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
+ *  - 유효기간: 적립일로부터 1년. 먼저 적립된 쓰자팁부터 사용, 1년 지난 쓰자팁은 다음 조회 때 소멸(내역에 기록)
  *  - (예정) 플레이 앱 보상형 광고 시청 완료: 10 쓰자팁 — 광고 서버 검증(SSV) 연결 후
  *
  * 필요한 Cloudflare 설정
@@ -25,7 +26,7 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.1.1";
+const VERSION = "2.2.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
@@ -130,7 +131,45 @@ function kstParts() {
 }
 
 /* ---------------- 쓰자팁 지갑 ---------------- */
-// w:<기기ID> = {b: 잔액, c: 생성시각}, l:<기기ID> = 최근 내역 [{t, d, r, b}]
+// w:<기기ID> = {b: 잔액, c: 생성시각, lots: [{a: 남은 양, t: 적립 시각}]}, l:<기기ID> = 최근 내역 [{t, d, r, b}]
+// 유효기간: 적립일로부터 1년(TIP_VALID_DAYS). 사용할 때는 먼저 적립된 것부터 차감(선입선출)
+const TIP_VALID_MS = 365 * 86400000;
+
+function normLots(w) {
+  if (!Array.isArray(w.lots)) w.lots = w.b > 0 ? [{ a: w.b, t: w.c || Date.now() }] : [];
+  w.lots = w.lots.filter((l) => l && l.a > 0);
+  w.b = w.lots.reduce((s, l) => s + l.a, 0);
+  return w;
+}
+function earn(w, amt) { normLots(w); if (amt > 0) w.lots.push({ a: amt, t: Date.now() }); w.b += amt; }
+function spend(w, amt) {
+  normLots(w);
+  let left = amt;
+  for (const l of w.lots) { if (!left) break; const u = Math.min(l.a, left); l.a -= u; left -= u; }
+  w.lots = w.lots.filter((l) => l.a > 0);
+  w.b = w.lots.reduce((s, l) => s + l.a, 0);
+}
+// 1년 지난 쓰자팁 소멸. 소멸량 반환
+function expireLots(w) {
+  normLots(w);
+  const cut = Date.now() - TIP_VALID_MS;
+  let gone = 0;
+  w.lots = w.lots.filter((l) => { if (l.t < cut) { gone += l.a; return false; } return true; });
+  w.b -= gone;
+  return gone;
+}
+// 가장 먼저 소멸될 쓰자팁(같은 날짜끼리 합산)
+function nextExpiry(w) {
+  normLots(w);
+  if (!w.lots.length) return null;
+  const kst = (t) => new Date(t + TIP_VALID_MS + 9 * 3600000).toISOString().slice(0, 10);
+  const first = kst(Math.min(...w.lots.map((l) => l.t)));
+  const amount = w.lots.filter((l) => kst(l.t) === first).reduce((s, l) => s + l.a, 0);
+  const days = Math.ceil((Math.min(...w.lots.map((l) => l.t)) + TIP_VALID_MS - Date.now()) / 86400000);
+  return { date: first, amount, days };
+}
+
+
 
 async function loadWallet(env, id) {
   try { return JSON.parse(await env.USAGE.get("w:" + id)) || null; } catch { return null; }
@@ -150,7 +189,11 @@ async function saveWallet(env, id, w, delta, reason) {
 // 지갑이 없으면 만들고 환영 쓰자팁 지급(같은 인터넷 주소 하루 지급 수 제한)
 async function ensureWallet(request, env, cfg, id) {
   let w = await loadWallet(env, id);
-  if (w) return { w, welcome: 0, limited: false };
+  if (w) {
+    const gone = expireLots(w);
+    if (gone > 0) await saveWallet(env, id, w, -gone, "유효기간 만료(적립 후 1년)");
+    return { w, welcome: 0, limited: false };
+  }
   const { day } = kstParts();
   // 인터넷 주소(IP)는 그대로 저장하지 않고 날짜를 섞은 해시(앞 16자)로만 사용 — 2일 뒤 자동 삭제
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -158,7 +201,8 @@ async function ensureWallet(request, env, cfg, id) {
   const ipCount = Number(await env.USAGE.get(ipKey)) || 0;
   const limited = ipCount >= cfg.newPerIp;
   const welcome = limited ? 0 : cfg.welcome;
-  w = { b: welcome, c: Date.now() };
+  w = { b: 0, c: Date.now(), lots: [] };
+  earn(w, welcome);
   await env.USAGE.put(ipKey, String(ipCount + 1), { expirationTtl: 172800 });
   await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영 선물");
   return { w, welcome, limited };
@@ -197,7 +241,7 @@ async function walletInfo(request, url, env, cfg, cors) {
   }
   return json({ ok: true, balance: w.b, cost: cfg.cost, attendTips: cfg.attendTips, streakTips: cfg.streakTips,
     attendedToday: ws.week[ws.todayIdx].attended, week: ws.week, todayIdx: ws.todayIdx,
-    welcome, welcomeLimited: limited, photos: Math.floor(w.b / cfg.cost), log }, 200, cors);
+    welcome, welcomeLimited: limited, photos: Math.floor(w.b / cfg.cost), nextExpiry: nextExpiry(w), log }, 200, cors);
 }
 
 // 출석: 매일 +ATTEND_TIPS, 일요일에 월~토를 모두 출석했으면 +STREAK_TIPS(그 외 일요일은 +ATTEND_TIPS)
@@ -208,7 +252,7 @@ async function attend(request, env, cfg, cors) {
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
   const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
   let ws = await weekStatus(env, id);
-  const base = { ok: true, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips };
+  const base = { ok: true, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips, nextExpiry: nextExpiry(w) };
   if (ws.week[ws.todayIdx].attended) {
     return json({ ...base, already: true, added: 0, streak: false, balance: w.b, photos: Math.floor(w.b / cfg.cost), week: ws.week, todayIdx: ws.todayIdx }, 200, cors);
   }
@@ -216,7 +260,7 @@ async function attend(request, env, cfg, cors) {
   const add = streak ? cfg.streakTips : cfg.attendTips;
   // 출석 기록은 9일 보관(주간 현황·연속 판정용)
   await env.USAGE.put(`att:${ws.week[ws.todayIdx].date}:${id}`, String(add), { expirationTtl: 9 * 86400 });
-  w.b += add;
+  earn(w, add);
   await saveWallet(env, id, w, add, streak ? "7일 연속 출석 보너스" : "오늘 접속 보상");
   ws.week[ws.todayIdx] = { date: ws.week[ws.todayIdx].date, attended: true, amount: add };
   return json({ ...base, already: false, added: add, streak, balance: w.b, photos: Math.floor(w.b / cfg.cost), week: ws.week, todayIdx: ws.todayIdx }, 200, cors);
@@ -334,7 +378,7 @@ async function recognize(request, env, cfg, cors) {
   // 제품을 1개 이상 찾은 경우에만 쓰자팁 차감
   const charged = result.data.items.length > 0 ? cfg.cost : 0;
   if (charged) {
-    w.b -= charged;
+    spend(w, charged);
     writes.push(saveWallet(env, deviceId, w, -charged, `찍자고 제품 인식 (사진 1장 · 제품 ${result.data.items.length}개)`));
   }
   await Promise.all(writes);
