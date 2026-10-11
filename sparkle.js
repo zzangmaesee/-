@@ -60,7 +60,7 @@
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("width", size);
       svg.setAttribute("height", size);
-      svg.innerHTML = '<path d="' + PATH + '" fill="' + color + '" stroke="#ffffff" stroke-width="1.1" stroke-linejoin="round"/>';
+      svg.innerHTML = '<path d="' + PATH + '" fill="' + color + '"/>';
       l.appendChild(svg);
       var h = size / 2;
       var at = function (fx, fy, s, r) {
