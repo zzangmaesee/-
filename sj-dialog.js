@@ -11,10 +11,10 @@
 
   var css = document.createElement("style");
   css.textContent =
-    ".sjdlg{position:fixed;inset:0;z-index:2000;background:rgba(43,37,64,.38);display:flex;align-items:flex-end;justify-content:center;padding:0 12px calc(16px + env(safe-area-inset-bottom))}" +
+    ".sjdlg{position:fixed;inset:0;z-index:2000;background:rgba(43,37,64,.42);display:flex;align-items:center;justify-content:center;padding:20px}" +
     ".sjdlg[hidden]{display:none}" +
-    ".sjdlg-box{width:min(536px,100%);background:#fff;border-radius:20px;padding:22px 18px 16px;box-shadow:0 10px 30px rgba(43,37,64,.18);animation:sjdlgUp .18s ease-out}" +
-    "@keyframes sjdlgUp{from{transform:translateY(16px);opacity:.4}to{transform:none;opacity:1}}" +
+    ".sjdlg-box{width:min(400px,100%);background:#fff;border-radius:20px;padding:22px 18px 16px;box-shadow:0 10px 30px rgba(43,37,64,.18);animation:sjdlgUp .18s ease-out}" +
+    "@keyframes sjdlgUp{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}" +
     ".sjdlg-t{display:block;font-family:\"Tmoney RoundWind\",sans-serif!important;font-weight:800;font-size:21px;letter-spacing:-.8px;color:#5B4885;margin:0 0 10px}" +
     ".sjdlg-m{margin:0 0 16px;font-size:14px;line-height:1.6;color:#4b4462;white-space:pre-line;word-break:keep-all}" +
     ".sjdlg-in{width:100%;height:46px;border:1px solid #DED8E8;border-radius:12px;padding:0 12px;font-size:15px;margin:0 0 16px;font-family:inherit;color:#2b2540}" +

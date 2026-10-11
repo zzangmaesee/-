@@ -46,15 +46,15 @@
     '<button type="button" class="exitgo">종료</button></div></div>';
   var css = document.createElement("style");
   css.textContent =
-    ".exitsheet{position:fixed;inset:0;z-index:1000;background:rgba(43,37,64,.38);display:flex;align-items:flex-end;justify-content:center;padding:0 12px calc(16px + env(safe-area-inset-bottom))}" +
+    ".exitsheet{position:fixed;inset:0;z-index:1000;background:rgba(43,37,64,.42);display:flex;align-items:center;justify-content:center;padding:20px}" +
     ".exitsheet[hidden]{display:none}" +
-    ".exitbox{width:min(536px,100%);background:#fff;border-radius:20px;padding:22px 18px 16px;box-shadow:0 10px 30px rgba(43,37,64,.18)}" +
+    ".exitbox{width:min(400px,100%);animation:sjdlgUp .18s ease-out;background:#fff;border-radius:20px;padding:22px 18px 16px;box-shadow:0 10px 30px rgba(43,37,64,.18)}" +
     ".exitbox b{display:block;font-size:17px;color:#5B4885;font-weight:850}" +
     ".exitbox p{margin:8px 0 16px;font-size:13px;line-height:1.55;color:#686172}" +
     ".exitbtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}" +
     ".exitbtns button{height:48px;border-radius:12px;font-size:15px;font-weight:850;font-family:inherit}" +
     ".exitstay{border:1px solid #DED8E8;background:#fff;color:#5B4885}" +
-    ".exitgo{border:0;background:#5B4885;color:#fff}";
+    ".exitgo{border:0;background:#5B4885;color:#fff}@keyframes sjdlgUp{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}";
   document.head.appendChild(css);
   document.body.appendChild(sheet);
 
