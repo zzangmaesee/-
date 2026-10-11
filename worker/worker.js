@@ -8,7 +8,7 @@
  *
  * 쓰자팁(앱 안 AI 인식 전용 포인트, 현금 교환 불가)
  *  - 처음 사용: 50 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
- *  - 출석: 하루 1회 5 쓰자팁(한국 시간 자정 기준)
+ *  - 출석(앱 접속): 하루 1회 1 쓰자팁, 일요일에 월~일 7일 연속이면 10 쓰자팁(한국 시간 자정 기준)
  *  - 찍자고 사진 1장: 10 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
  *  - (예정) 플레이 앱 보상형 광고 시청 완료: 10 쓰자팁 — 광고 서버 검증(SSV) 연결 후
  *
@@ -25,12 +25,13 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
   WELCOME_TIPS: 50,            // 처음 사용 시 지급
-  ATTEND_TIPS: 5,              // 하루 출석
+  ATTEND_TIPS: 1,              // 하루 접속(출석)
+  STREAK_TIPS: 10,             // 일요일: 월~일 7일 연속 접속 시(빠진 날이 있으면 ATTEND_TIPS)
   COST_TIPS: 10,               // 찍자고 사진 1장
   NEW_PER_IP_DAY: 5,           // 같은 인터넷 주소에서 하루 환영 쓰자팁 지급 최대 기기 수
   MONTHLY_KRW_CAP: 10000,      // 월 추정 비용 상한(원) — 도달 시 자동 중지
@@ -47,7 +48,7 @@ const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024;   // 디코딩 후 1.5MB (앱이 긴 
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp"];
 const GEMINI_TIMEOUT_MS = 25000;
 const MAX_ITEMS = 30;
-const LOG_MAX = 20;
+const LOG_MAX = 50;
 
 const DEFAULT_CATEGORIES = [
   "마스크/팩", "토너/토너패드", "세럼/앰플", "크림/보습", "선케어", "메이크업/베이스",
@@ -92,6 +93,7 @@ function readConfig(env) {
     model: str("MODEL"),
     welcome: num("WELCOME_TIPS"),
     attendTips: num("ATTEND_TIPS"),
+    streakTips: num("STREAK_TIPS"),
     cost: Math.max(1, num("COST_TIPS")),
     newPerIp: num("NEW_PER_IP_DAY"),
     monthlyKrwCap: num("MONTHLY_KRW_CAP"),
@@ -157,39 +159,66 @@ async function ensureWallet(request, env, cfg, id) {
   const welcome = limited ? 0 : cfg.welcome;
   w = { b: welcome, c: Date.now() };
   await env.USAGE.put(ipKey, String(ipCount + 1), { expirationTtl: 172800 });
-  await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영");
+  await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영 선물");
   return { w, welcome, limited };
+}
+
+// 이번 주(월~일, 한국 시간) 날짜 목록과 오늘 위치
+function weekDays() {
+  const now = new Date(Date.now() + 9 * 3600 * 1000);
+  const dow = (now.getUTCDay() + 6) % 7;          // 월=0 … 일=6
+  const days = [];
+  for (let k = 0; k < 7; k++) {
+    const d = new Date(now.getTime() + (k - dow) * 86400000);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return { days, todayIdx: dow };
+}
+
+// 이번 주 출석 현황: [{date, amount(적립액, 미출석 0), attended}]
+async function weekStatus(env, id) {
+  const { days, todayIdx } = weekDays();
+  const vals = await Promise.all(days.map((d, k) => (k <= todayIdx ? env.USAGE.get(`att:${d}:${id}`) : null)));
+  return {
+    todayIdx,
+    week: days.map((d, k) => ({ date: d, attended: !!vals[k], amount: vals[k] ? Number(vals[k]) || 1 : 0 }))
+  };
 }
 
 async function walletInfo(request, url, env, cfg, cors) {
   const id = url.searchParams.get("deviceId") || "";
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
   const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
-  const { day } = kstParts();
-  const attended = !!(await env.USAGE.get(`att:${day}:${id}`));
+  const ws = await weekStatus(env, id);
   let log = [];
   if (url.searchParams.get("log") === "1") {
     try { log = JSON.parse(await env.USAGE.get("l:" + id)) || []; } catch {}
   }
-  return json({ ok: true, balance: w.b, cost: cfg.cost, attendTips: cfg.attendTips, attendedToday: attended,
+  return json({ ok: true, balance: w.b, cost: cfg.cost, attendTips: cfg.attendTips, streakTips: cfg.streakTips,
+    attendedToday: ws.week[ws.todayIdx].attended, week: ws.week, todayIdx: ws.todayIdx,
     welcome, welcomeLimited: limited, photos: Math.floor(w.b / cfg.cost), log }, 200, cors);
 }
 
+// 출석: 매일 +ATTEND_TIPS, 일요일에 월~토를 모두 출석했으면 +STREAK_TIPS(그 외 일요일은 +ATTEND_TIPS)
 async function attend(request, env, cfg, cors) {
   let body;
   try { body = await request.json(); } catch { return fail(400, "BAD_JSON", "요청 형식이 올바르지 않습니다.", cors); }
   const id = String((body && body.deviceId) || "");
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
   const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
-  const { day } = kstParts();
-  const key = `att:${day}:${id}`;
-  if (await env.USAGE.get(key)) {
-    return json({ ok: true, already: true, added: 0, balance: w.b, cost: cfg.cost, photos: Math.floor(w.b / cfg.cost), welcome, welcomeLimited: limited }, 200, cors);
+  let ws = await weekStatus(env, id);
+  const base = { ok: true, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips };
+  if (ws.week[ws.todayIdx].attended) {
+    return json({ ...base, already: true, added: 0, streak: false, balance: w.b, photos: Math.floor(w.b / cfg.cost), week: ws.week, todayIdx: ws.todayIdx }, 200, cors);
   }
-  await env.USAGE.put(key, "1", { expirationTtl: 172800 });
-  w.b += cfg.attendTips;
-  await saveWallet(env, id, w, cfg.attendTips, "출석");
-  return json({ ok: true, already: false, added: cfg.attendTips, balance: w.b, cost: cfg.cost, photos: Math.floor(w.b / cfg.cost), welcome, welcomeLimited: limited }, 200, cors);
+  const streak = ws.todayIdx === 6 && ws.week.slice(0, 6).every((x) => x.attended);
+  const add = streak ? cfg.streakTips : cfg.attendTips;
+  // 출석 기록은 9일 보관(주간 현황·연속 판정용)
+  await env.USAGE.put(`att:${ws.week[ws.todayIdx].date}:${id}`, String(add), { expirationTtl: 9 * 86400 });
+  w.b += add;
+  await saveWallet(env, id, w, add, streak ? "7일 연속 출석 보너스" : "오늘 접속 보상");
+  ws.week[ws.todayIdx] = { date: ws.week[ws.todayIdx].date, attended: true, amount: add };
+  return json({ ...base, already: false, added: add, streak, balance: w.b, photos: Math.floor(w.b / cfg.cost), week: ws.week, todayIdx: ws.todayIdx }, 200, cors);
 }
 
 /* ---------------- /health ---------------- */
@@ -201,7 +230,7 @@ async function health(url, env, cfg, cors) {
     model: cfg.model,
     keySet: typeof env.GEMINI_API_KEY === "string" && env.GEMINI_API_KEY.length > 10,
     kvBound: !!env.USAGE,
-    tips: { welcome: cfg.welcome, attend: cfg.attendTips, cost: cfg.cost },
+    tips: { welcome: cfg.welcome, attend: cfg.attendTips, streak: cfg.streakTips, cost: cfg.cost },
     monthlyKrwCap: cfg.monthlyKrwCap
   };
   if (env.USAGE) {
@@ -305,7 +334,7 @@ async function recognize(request, env, cfg, cors) {
   const charged = result.data.items.length > 0 ? cfg.cost : 0;
   if (charged) {
     w.b -= charged;
-    writes.push(saveWallet(env, deviceId, w, -charged, `찍자고 사진 1장(제품 ${result.data.items.length}개)`));
+    writes.push(saveWallet(env, deviceId, w, -charged, `찍자고 제품 인식 (사진 1장 · 제품 ${result.data.items.length}개)`));
   }
   await Promise.all(writes);
 

@@ -10,7 +10,7 @@
   if (!window.history || !history.pushState) return;
 
   // 위에 떠 있는 화면부터 닫기(나중에 열리는 화면이 앞쪽)
-  var ORDER = ["notebook", "tipsheet", "calendar", "photomodal", "notifmodal", "locmodal", "form", "setmodal", "choice"];
+  var ORDER = ["notebook", "tipdetail", "calendar", "photomodal", "notifmodal", "locmodal", "form", "setmodal", "choice"];
   var exiting = false;
 
   function topModal() {
