@@ -200,7 +200,7 @@ async function recognize(request, env, cfg, cors) {
 
   if (costUsed >= cfg.monthlyKrwCap) return fail(429, "MONTHLY_CAP", "이번 달 AI 인식 사용량이 모두 소진되어 잠시 중지되었습니다. 직접입력을 이용해 주세요.", cors);
   if (allUsed >= cfg.globalDailyCap) return fail(429, "GLOBAL_CAP", "오늘은 AI 인식 요청이 많아 잠시 중지되었습니다. 직접입력을 이용해 주세요.", cors);
-  if (devUsed >= cfg.dailyLimit) return fail(429, "DAILY_LIMIT", `오늘 AI 인식 ${cfg.dailyLimit}회를 모두 사용했습니다. 내일 다시 이용하거나 직접입력을 이용해 주세요.`, cors, { remaining: 0 });
+  if (devUsed >= cfg.dailyLimit) return fail(429, "DAILY_LIMIT", `오늘 AI 인식 가능한 사진 ${cfg.dailyLimit}장을 모두 사용했습니다. 내일 다시 이용하거나 직접입력을 이용해 주세요.`, cors, { remaining: 0 });
 
   // Gemini 호출(일시 오류 시 1회 재시도)
   let result;
