@@ -14,12 +14,12 @@
   var cfg = {
     target: target,
     adsEnabled: false,
-    appVersion: "1.0.3",
+    appVersion: "1.0.4",
     dataVersion: 2,
     // 광고를 절대 넣지 않는 화면(재고 확인·수정·백업 등 핵심 기능 보호)
     adFreeScreens: ["inventory", "edit", "settings", "backup"],
     ai: {
-      endpoint: "",   // 2단계에서 Cloudflare Workers 주소를 넣습니다(키 아님)
+      endpoint: "https://sseujago.zzangmaesee.workers.dev",   // AI 인식 Worker 주소(비밀값 아님, 키는 Worker에만 있음)
       dailyLimit: 3
     }
   };
