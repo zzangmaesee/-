@@ -79,6 +79,8 @@
 
   window.addEventListener("popstate", function () {
     if (exiting || (window.SJ_EXIT && SJ_EXIT.pending())) return;   // 종료 진행은 nav.js가 처리
+    // 앱 확인 창이 떠 있으면 뒤로가기 = 취소
+    if (window.SJ_DIALOG && SJ_DIALOG.isOpen()) { SJ_DIALOG.cancel(); guard(); return; }
     // 확인 창이 떠 있을 때 뒤로가기 = 종료
     if (!sheet.hidden) { exitApp(); return; }
     var m = topModal();

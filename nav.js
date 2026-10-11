@@ -31,3 +31,28 @@
     pending: exitPending
   };
 })();
+
+/*
+ * 하단 메뉴 즉시 이동: 손가락이 닿는 순간(pointerdown) 바로 다음 화면으로 이동합니다.
+ * (손을 뗄 때까지 기다리는 click보다 빠름. 키보드·접근성 도구의 click도 그대로 동작)
+ */
+(function () {
+  "use strict";
+  var going = false;
+  function same(a) {
+    try { var u = new URL(a.href, location.href); return u.pathname === location.pathname && u.search === location.search; }
+    catch (e) { return true; }
+  }
+  document.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    var a = e.target && e.target.closest && e.target.closest(".nav a[href]");
+    if (!a || same(a)) return;
+    going = true;
+    location.assign(a.href);
+  }, true);
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest && e.target.closest(".nav a[href]");
+    if (a && going) e.preventDefault();
+  }, true);
+  window.addEventListener("pageshow", function () { going = false; });
+})();
