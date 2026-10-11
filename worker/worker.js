@@ -1,29 +1,38 @@
 /**
- * 쓰자고 AI 사진 인식 프록시 (Cloudflare Worker)
+ * 쓰자고 AI 사진 인식 '찍자고' 프록시 + 쓰자팁 지갑 (Cloudflare Worker)
  *
  * 흐름: 앱(브라우저) → 이 Worker → Gemini API
  *  - API 키는 Cloudflare Secret(GEMINI_API_KEY)에만 있습니다. 이 파일에는 비밀값이 없습니다.
- *  - 사진·인식 원문은 저장하거나 로그에 남기지 않습니다. KV에는 사용 횟수/추정 비용 숫자만 저장합니다.
+ *  - 사진·인식 원문은 저장하거나 로그에 남기지 않습니다.
+ *  - KV에는 기기 ID별 쓰자팁 잔액·최근 내역, 출석 여부, 사용량/추정 비용 숫자만 저장합니다.
+ *
+ * 쓰자팁(앱 안 AI 인식 전용 포인트, 현금 교환 불가)
+ *  - 처음 사용: 50 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
+ *  - 출석: 하루 1회 5 쓰자팁(한국 시간 자정 기준)
+ *  - 찍자고 사진 1장: 10 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
+ *  - (예정) 플레이 앱 보상형 광고 시청 완료: 10 쓰자팁 — 광고 서버 검증(SSV) 연결 후
  *
  * 필요한 Cloudflare 설정
  *  - Secret  GEMINI_API_KEY : Google AI Studio 키
- *  - KV 바인딩 USAGE         : 횟수 기록 저장소(SJ_USAGE)
+ *  - KV 바인딩 USAGE         : 저장소(SJ_USAGE)
  *  - (선택) 일반 변수 — 없으면 아래 DEFAULTS 사용
- *      MODEL, DAILY_LIMIT, MONTHLY_KRW_CAP, GLOBAL_DAILY_CAP, ALLOWED_ORIGINS,
- *      PRICE_IN_USD_PER_M, PRICE_OUT_USD_PER_M, USD_KRW, THINKING_LEVEL
  *
  * 엔드포인트
- *  - GET  /health            : Worker 상태(키/KV 연결 여부만, 값은 노출 안 함)
- *  - GET  /health?check=1    : Gemini 키·모델이 실제로 작동하는지 확인(토큰 비용 없음)
- *  - POST /recognize         : 사진 인식 {deviceId, image(base64), mime, categories?}
- *  - GET  /quota?deviceId=…  : 오늘 남은 횟수
+ *  - GET  /health[?check=1]        : 상태 확인(키 값은 노출 안 함)
+ *  - GET  /wallet?deviceId=…        : 잔액 조회(처음이면 지갑 생성 + 환영 쓰자팁)
+ *  - POST /attend {deviceId}        : 오늘 출석 적립
+ *  - POST /recognize {deviceId, image, mime, categories?} : 찍자고 사진 인식
+ *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
-  DAILY_LIMIT: 3,              // 기기당 하루 무료 횟수
+  WELCOME_TIPS: 50,            // 처음 사용 시 지급
+  ATTEND_TIPS: 5,              // 하루 출석
+  COST_TIPS: 10,               // 찍자고 사진 1장
+  NEW_PER_IP_DAY: 5,           // 같은 인터넷 주소에서 하루 환영 쓰자팁 지급 최대 기기 수
   MONTHLY_KRW_CAP: 10000,      // 월 추정 비용 상한(원) — 도달 시 자동 중지
   GLOBAL_DAILY_CAP: 300,       // 전체 하루 호출 상한(무료 등급 보호·폭주 방지)
   PRICE_IN_USD_PER_M: 0.25,    // 입력 100만 토큰당 달러(연결 시점 공식 가격표로 재확인)
@@ -38,6 +47,7 @@ const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024;   // 디코딩 후 1.5MB (앱이 긴 
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp"];
 const GEMINI_TIMEOUT_MS = 25000;
 const MAX_ITEMS = 30;
+const LOG_MAX = 20;
 
 const DEFAULT_CATEGORIES = [
   "마스크/팩", "토너/토너패드", "세럼/앰플", "크림/보습", "선케어", "메이크업/베이스",
@@ -55,11 +65,12 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/health" && request.method === "GET") return await health(url, env, cfg, cors);
-      if (url.pathname === "/quota" && request.method === "GET") return await quota(url, env, cfg, cors);
-      if (url.pathname === "/recognize" && request.method === "POST") {
-        if (origin && !originAllowed(origin, cfg)) return fail(403, "ORIGIN_NOT_ALLOWED", "허용되지 않은 주소에서 온 요청입니다.", cors);
-        return await recognize(request, env, cfg, cors);
-      }
+      if (origin && !originAllowed(origin, cfg)) return fail(403, "ORIGIN_NOT_ALLOWED", "허용되지 않은 주소에서 온 요청입니다.", cors);
+      if (!env.USAGE) return fail(503, "NOT_READY", "서버 준비 중입니다.", cors);
+      if (url.pathname === "/wallet" && request.method === "GET") return await walletInfo(request, url, env, cfg, cors);
+      if (url.pathname === "/attend" && request.method === "POST") return await attend(request, env, cfg, cors);
+      if (url.pathname === "/quota" && request.method === "GET") return await quota(request, url, env, cfg, cors);
+      if (url.pathname === "/recognize" && request.method === "POST") return await recognize(request, env, cfg, cors);
       return fail(404, "NOT_FOUND", "없는 주소입니다.", cors);
     } catch (e) {
       // 사진·응답 원문은 남기지 않고 오류 종류만 기록
@@ -74,12 +85,15 @@ export default {
 function readConfig(env) {
   const num = (k) => {
     const v = Number(env[k]);
-    return Number.isFinite(v) && v >= 0 ? v : DEFAULTS[k];
+    return env[k] !== undefined && Number.isFinite(v) && v >= 0 ? v : DEFAULTS[k];
   };
   const str = (k) => (typeof env[k] === "string" ? env[k].trim() : DEFAULTS[k]);
   return {
     model: str("MODEL"),
-    dailyLimit: num("DAILY_LIMIT"),
+    welcome: num("WELCOME_TIPS"),
+    attendTips: num("ATTEND_TIPS"),
+    cost: Math.max(1, num("COST_TIPS")),
+    newPerIp: num("NEW_PER_IP_DAY"),
     monthlyKrwCap: num("MONTHLY_KRW_CAP"),
     globalDailyCap: num("GLOBAL_DAILY_CAP"),
     priceIn: num("PRICE_IN_USD_PER_M"),
@@ -113,6 +127,71 @@ function kstParts() {
   return { day: iso.slice(0, 10), month: iso.slice(0, 7) };
 }
 
+/* ---------------- 쓰자팁 지갑 ---------------- */
+// w:<기기ID> = {b: 잔액, c: 생성시각}, l:<기기ID> = 최근 내역 [{t, d, r, b}]
+
+async function loadWallet(env, id) {
+  try { return JSON.parse(await env.USAGE.get("w:" + id)) || null; } catch { return null; }
+}
+
+async function saveWallet(env, id, w, delta, reason) {
+  w.b = Math.max(0, Math.round(w.b));
+  let log = [];
+  try { log = JSON.parse(await env.USAGE.get("l:" + id)) || []; } catch {}
+  log.unshift({ t: Date.now(), d: delta, r: reason, b: w.b });
+  await Promise.all([
+    env.USAGE.put("w:" + id, JSON.stringify(w)),
+    env.USAGE.put("l:" + id, JSON.stringify(log.slice(0, LOG_MAX)))
+  ]);
+}
+
+// 지갑이 없으면 만들고 환영 쓰자팁 지급(같은 인터넷 주소 하루 지급 수 제한)
+async function ensureWallet(request, env, cfg, id) {
+  let w = await loadWallet(env, id);
+  if (w) return { w, welcome: 0, limited: false };
+  const { day } = kstParts();
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const ipKey = `ipnew:${day}:${ip}`;
+  const ipCount = Number(await env.USAGE.get(ipKey)) || 0;
+  const limited = ipCount >= cfg.newPerIp;
+  const welcome = limited ? 0 : cfg.welcome;
+  w = { b: welcome, c: Date.now() };
+  await env.USAGE.put(ipKey, String(ipCount + 1), { expirationTtl: 172800 });
+  await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영");
+  return { w, welcome, limited };
+}
+
+async function walletInfo(request, url, env, cfg, cors) {
+  const id = url.searchParams.get("deviceId") || "";
+  if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
+  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
+  const { day } = kstParts();
+  const attended = !!(await env.USAGE.get(`att:${day}:${id}`));
+  let log = [];
+  if (url.searchParams.get("log") === "1") {
+    try { log = JSON.parse(await env.USAGE.get("l:" + id)) || []; } catch {}
+  }
+  return json({ ok: true, balance: w.b, cost: cfg.cost, attendTips: cfg.attendTips, attendedToday: attended,
+    welcome, welcomeLimited: limited, photos: Math.floor(w.b / cfg.cost), log }, 200, cors);
+}
+
+async function attend(request, env, cfg, cors) {
+  let body;
+  try { body = await request.json(); } catch { return fail(400, "BAD_JSON", "요청 형식이 올바르지 않습니다.", cors); }
+  const id = String((body && body.deviceId) || "");
+  if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
+  const { w, welcome, limited } = await ensureWallet(request, env, cfg, id);
+  const { day } = kstParts();
+  const key = `att:${day}:${id}`;
+  if (await env.USAGE.get(key)) {
+    return json({ ok: true, already: true, added: 0, balance: w.b, cost: cfg.cost, photos: Math.floor(w.b / cfg.cost), welcome, welcomeLimited: limited }, 200, cors);
+  }
+  await env.USAGE.put(key, "1", { expirationTtl: 172800 });
+  w.b += cfg.attendTips;
+  await saveWallet(env, id, w, cfg.attendTips, "출석");
+  return json({ ok: true, already: false, added: cfg.attendTips, balance: w.b, cost: cfg.cost, photos: Math.floor(w.b / cfg.cost), welcome, welcomeLimited: limited }, 200, cors);
+}
+
 /* ---------------- /health ---------------- */
 
 async function health(url, env, cfg, cors) {
@@ -122,7 +201,7 @@ async function health(url, env, cfg, cors) {
     model: cfg.model,
     keySet: typeof env.GEMINI_API_KEY === "string" && env.GEMINI_API_KEY.length > 10,
     kvBound: !!env.USAGE,
-    dailyLimit: cfg.dailyLimit,
+    tips: { welcome: cfg.welcome, attend: cfg.attendTips, cost: cfg.cost },
     monthlyKrwCap: cfg.monthlyKrwCap
   };
   if (env.USAGE) {
@@ -149,21 +228,20 @@ async function health(url, env, cfg, cors) {
   return json(out, out.ok ? 200 : 503, cors);
 }
 
-/* ---------------- /quota ---------------- */
+/* ---------------- /quota (구버전 앱 호환) ---------------- */
 
-async function quota(url, env, cfg, cors) {
-  const deviceId = url.searchParams.get("deviceId") || "";
-  if (!validDeviceId(deviceId)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
-  if (!env.USAGE) return fail(503, "NOT_READY", "서버 준비 중입니다.", cors);
-  const { day } = kstParts();
-  const used = Number(await env.USAGE.get(`dev:${day}:${deviceId}`)) || 0;
-  return json({ ok: true, used, limit: cfg.dailyLimit, remaining: Math.max(0, cfg.dailyLimit - used) }, 200, cors);
+async function quota(request, url, env, cfg, cors) {
+  const id = url.searchParams.get("deviceId") || "";
+  if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
+  const { w } = await ensureWallet(request, env, cfg, id);
+  const photos = Math.floor(w.b / cfg.cost);
+  return json({ ok: true, remaining: photos, limit: photos, balance: w.b }, 200, cors);
 }
 
-/* ---------------- /recognize ---------------- */
+/* ---------------- /recognize (찍자고) ---------------- */
 
 async function recognize(request, env, cfg, cors) {
-  if (!env.GEMINI_API_KEY || !env.USAGE) return fail(503, "NOT_READY", "서버 준비 중입니다.", cors);
+  if (!env.GEMINI_API_KEY) return fail(503, "NOT_READY", "서버 준비 중입니다.", cors);
 
   const len = Number(request.headers.get("Content-Length") || 0);
   if (len > MAX_IMAGE_BYTES * 1.4 + 20000) return fail(413, "TOO_LARGE", "사진이 너무 큽니다.", cors);
@@ -189,18 +267,18 @@ async function recognize(request, env, cfg, cors) {
     ? body.categories.filter((c) => typeof c === "string" && c.length <= 30).slice(0, 40)
     : DEFAULT_CATEGORIES;
 
-  // 한도 확인
+  // 한도·잔액 확인
   const { day, month } = kstParts();
-  const devKey = `dev:${day}:${deviceId}`;
   const allKey = `all:${day}`;
   const costKey = `cost:${month}`;
-  const [devUsed, allUsed, costUsed] = await Promise.all([
-    env.USAGE.get(devKey), env.USAGE.get(allKey), env.USAGE.get(costKey)
-  ]).then((a) => a.map((v) => Number(v) || 0));
+  const [allUsed, costUsed] = await Promise.all([env.USAGE.get(allKey), env.USAGE.get(costKey)]).then((a) => a.map((v) => Number(v) || 0));
+  if (costUsed >= cfg.monthlyKrwCap) return fail(429, "MONTHLY_CAP", "이번 달 찍자고 사용량이 모두 소진되어 잠시 중지되었습니다. 적자고(직접 입력)를 이용해 주세요.", cors);
+  if (allUsed >= cfg.globalDailyCap) return fail(429, "GLOBAL_CAP", "오늘은 찍자고 요청이 많아 잠시 중지되었습니다. 적자고(직접 입력)를 이용해 주세요.", cors);
 
-  if (costUsed >= cfg.monthlyKrwCap) return fail(429, "MONTHLY_CAP", "이번 달 AI 인식 사용량이 모두 소진되어 잠시 중지되었습니다. 직접입력을 이용해 주세요.", cors);
-  if (allUsed >= cfg.globalDailyCap) return fail(429, "GLOBAL_CAP", "오늘은 AI 인식 요청이 많아 잠시 중지되었습니다. 직접입력을 이용해 주세요.", cors);
-  if (devUsed >= cfg.dailyLimit) return fail(429, "DAILY_LIMIT", `오늘 AI 인식 가능한 사진 ${cfg.dailyLimit}장을 모두 사용했습니다. 내일 다시 이용하거나 직접입력을 이용해 주세요.`, cors, { remaining: 0 });
+  const { w } = await ensureWallet(request, env, cfg, deviceId);
+  if (w.b < cfg.cost) {
+    return fail(402, "NO_TIPS", `쓰자팁이 부족해요. 찍자고 사진 1장에 ${cfg.cost} 쓰자팁이 필요해요.`, cors, { balance: w.b, cost: cfg.cost, photos: 0, remaining: 0 });
+  }
 
   // Gemini 호출(일시 오류 시 1회 재시도)
   let result;
@@ -212,24 +290,34 @@ async function recognize(request, env, cfg, cors) {
   if (!result.ok) {
     console.error("gemini_fail", result.code);
     const msg = result.code === "BUSY"
-      ? "AI 인식이 지금 붐빕니다. 잠시 후 다시 시도하거나 직접입력을 이용해 주세요."
-      : "AI 인식에 실패했습니다. 직접입력을 이용해 주세요.";
-    return fail(502, result.code, msg, cors);   // 실패는 횟수에서 차감하지 않음
+      ? "찍자고가 지금 붐빕니다. 잠시 후 다시 시도해 주세요. 쓰자팁은 차감되지 않았어요."
+      : "찍자고 인식에 실패했습니다. 쓰자팁은 차감되지 않았어요.";
+    return fail(502, result.code, msg, cors, { balance: w.b, cost: cfg.cost, photos: Math.floor(w.b / cfg.cost) });
   }
 
-  // 사용량 기록(성공한 경우만). 날짜 키는 2일 뒤, 월 키는 40일 뒤 자동 삭제
+  // 비용 기록(호출이 성공했으면 실제 비용이 발생하므로 기록). 날짜 키 2일, 월 키 40일 뒤 자동 삭제
   const krw = estimateKrw(result.usage, cfg);
-  await Promise.all([
-    env.USAGE.put(devKey, String(devUsed + 1), { expirationTtl: 172800 }),
+  const writes = [
     env.USAGE.put(allKey, String(allUsed + 1), { expirationTtl: 172800 }),
     env.USAGE.put(costKey, String(costUsed + krw), { expirationTtl: 3456000 })
-  ]);
+  ];
+  // 제품을 1개 이상 찾은 경우에만 쓰자팁 차감
+  const charged = result.data.items.length > 0 ? cfg.cost : 0;
+  if (charged) {
+    w.b -= charged;
+    writes.push(saveWallet(env, deviceId, w, -charged, `찍자고 사진 1장(제품 ${result.data.items.length}개)`));
+  }
+  await Promise.all(writes);
 
   return json({
     ok: true,
     sourceType: result.data.sourceType,
     items: result.data.items,
-    remaining: Math.max(0, cfg.dailyLimit - devUsed - 1),
+    charged,
+    balance: w.b,
+    cost: cfg.cost,
+    photos: Math.floor(w.b / cfg.cost),
+    remaining: Math.floor(w.b / cfg.cost),
     model: cfg.model
   }, 200, cors);
 }

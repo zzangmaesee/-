@@ -1,5 +1,5 @@
 /*
- * 쓰자고 AI 사진 인식 어댑터
+ * 쓰자고 AI 사진 인식(찍자고) 어댑터 + 쓰자팁 지갑
  * recognizeProducts(file) → 표준 결과 {ok, items[], remaining, code, message}
  *  - 공급자(Gemini 등)는 Worker 쪽에 숨겨져 있어, 공급자가 바뀌어도 이 함수 모양은 그대로 둡니다.
  *  - 전송 전 긴 변 1024px JPEG로 다시 그려 EXIF(위치 등 메타데이터)를 제거합니다.
@@ -86,11 +86,12 @@
       var j = null;
       try { j = await res.json(); } catch (e) {}
       if (!j || typeof j !== "object") return failResult("BAD_RESPONSE", "AI 인식 응답을 읽지 못했습니다.");
-      if (!res.ok || !j.ok) return failResult(j.code || "HTTP_" + res.status, j.message || "AI 인식에 실패했습니다.", { remaining: j.remaining });
+      if (!res.ok || !j.ok) return failResult(j.code || "HTTP_" + res.status, j.message || "찍자고 인식에 실패했습니다.", { remaining: j.remaining, balance: j.balance, photos: j.photos, cost: j.cost });
       var items = (Array.isArray(j.items) ? j.items : []).filter(function (it) {
         return it && typeof it.name === "string" && it.name.trim();
       });
-      return { ok: true, items: items, sourceType: j.sourceType || "other", remaining: j.remaining };
+      return { ok: true, items: items, sourceType: j.sourceType || "other", remaining: j.remaining,
+        balance: j.balance, photos: j.photos, charged: j.charged || 0, cost: j.cost };
     } catch (e) {
       return e && e.name === "AbortError"
         ? failResult("TIMEOUT", "AI 인식 시간이 너무 오래 걸려 중단했습니다.")
@@ -110,5 +111,32 @@
     } catch (e) { return null; }
   }
 
-  window.SJ_AI = { recognizeProducts: recognizeProducts, quota: aiQuota, enabled: function () { return !!endpoint(); } };
+  // 쓰자팁 지갑: 잔액 조회(처음이면 서버가 환영 쓰자팁 지급) / 하루 출석
+  async function wallet(withLog) {
+    var base = endpoint();
+    if (!base || !navigator.onLine) return null;
+    try {
+      var r = await fetch(base + "/wallet?deviceId=" + encodeURIComponent(deviceId()) + (withLog ? "&log=1" : ""));
+      var j = await r.json();
+      return j && j.ok ? j : null;
+    } catch (e) { return null; }
+  }
+  async function attend() {
+    var base = endpoint();
+    if (!base || !navigator.onLine) return null;
+    try {
+      var r = await fetch(base + "/attend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: deviceId() }) });
+      var j = await r.json();
+      return j && j.ok ? j : null;
+    } catch (e) { return null; }
+  }
+  // 백업·복원용: 쓰자팁 지갑은 기기 ID에 묶여 있어 복원 시 함께 옮깁니다
+  function getDeviceId() { return deviceId(); }
+  function setDeviceId(id) {
+    if (!/^[A-Za-z0-9-]{16,64}$/.test(String(id || ""))) return false;
+    try { localStorage.setItem(DEVICE_KEY, id); return true; } catch (e) { return false; }
+  }
+
+  window.SJ_AI = { recognizeProducts: recognizeProducts, quota: aiQuota, wallet: wallet, attend: attend,
+    deviceId: getDeviceId, setDeviceId: setDeviceId, enabled: function () { return !!endpoint(); } };
 })();
