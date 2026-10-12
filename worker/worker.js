@@ -8,7 +8,7 @@
  *
  * 쓰자팁(앱 안 AI 인식 전용 포인트, 현금 교환 불가)
  *  - 처음 사용: 100 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
- *  - 출석(앱 접속): 하루 1회 1 쓰자팁, 일요일에 월~일 7일 연속이면 10 쓰자팁(한국 시간 자정 기준)
+ *  - 출석(앱 접속): 하루 1회 10 쓰자팁, 일요일에 월~일 7일 연속이면 50 쓰자팁 (베타 테스트 기간 값)(한국 시간 자정 기준)
  *  - 찍자고 사진 1장: 5 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
  *  - 유효기간: 적립일로부터 1년. 먼저 적립된 쓰자팁부터 사용, 1년 지난 쓰자팁은 다음 조회 때 소멸(내역에 기록)
  *  - 일괄 재설정: RESET_ID를 바꾸면 모든 기기 잔액을 다음 접속 때 RESET_TIPS로 한 번 맞춤(베타 테스트용)
@@ -28,13 +28,13 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
   WELCOME_TIPS: 100,           // 처음 사용 시 지급
-  ATTEND_TIPS: 1,              // 하루 접속(출석)
-  STREAK_TIPS: 10,             // 일요일: 월~일 7일 연속 접속 시(빠진 날이 있으면 ATTEND_TIPS)
+  ATTEND_TIPS: 10,             // 하루 접속(출석) — 베타 테스트 기간 값(원래 1)
+  STREAK_TIPS: 50,             // 베타 테스트 기간 값(원래 10). 일요일: 월~일 7일 연속 접속 시(빠진 날이 있으면 ATTEND_TIPS)
   COST_TIPS: 5,                // 찍자고 사진 1장
   RESET_ID: "beta-2026-10-12", // 바꾸면 모든 지갑을 다음 접속 때 RESET_TIPS로 한 번 재설정(빈칸이면 안 함)
   RESET_TIPS: 100,             // 일괄 재설정 잔액
@@ -238,7 +238,7 @@ async function ensureWallet(request, env, cfg, id, token) {
   const ipCount = Number(await env.USAGE.get(ipKey)) || 0;
   const limited = ipCount >= cfg.newPerIp;
   const welcome = limited ? 0 : cfg.welcome;
-  w = { b: 0, c: Date.now(), lots: [], r: cfg.resetId || undefined };
+  w = { b: 0, c: Date.now(), lots: [], r: cfg.resetId || undefined, rn: cfg.resetId || undefined };
   earn(w, welcome);
   await env.USAGE.put(ipKey, String(ipCount + 1), { expirationTtl: 172800 });
   await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영 선물");
@@ -289,7 +289,14 @@ async function attend(request, env, cfg, cors) {
   if (!validDeviceId(id)) return fail(400, "BAD_DEVICE", "기기 정보가 올바르지 않습니다.", cors);
   const { w, welcome, limited } = await ensureWallet(request, env, cfg, id, body && body.ts);
   let ws = await weekStatus(env, id);
-  const base = { ok: true, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips, nextExpiry: nextExpiry(w) };
+  // 일괄 재설정 안내: 재설정된 지갑에 앱 첫 화면 팝업을 1번만 보냄(rn = 안내한 재설정 ID)
+  let resetNotice = 0;
+  if (cfg.resetId && w.r === cfg.resetId && w.rn !== cfg.resetId) {
+    resetNotice = cfg.resetTips;
+    w.rn = cfg.resetId;
+    if (ws.week[ws.todayIdx].attended) await env.USAGE.put("w:" + id, JSON.stringify(w));   // 미출석이면 아래 saveWallet에서 함께 저장
+  }
+  const base = { ok: true, resetNotice, cost: cfg.cost, welcome, welcomeLimited: limited, attendTips: cfg.attendTips, streakTips: cfg.streakTips, nextExpiry: nextExpiry(w) };
   if (ws.week[ws.todayIdx].attended) {
     return json({ ...base, already: true, added: 0, streak: false, balance: w.b, photos: Math.floor(w.b / cfg.cost), week: ws.week, todayIdx: ws.todayIdx }, 200, cors);
   }
