@@ -6,7 +6,7 @@
  *  - 다른 주소(AI 서버, 글꼴 CDN 등)는 관여하지 않음
  * 새 버전 배포 시 CACHE 이름을 올리면, 새 서비스워커가 설치되면서 전체 파일을 새로 받아 둡니다.
  */
-const CACHE = 'sseujago-v52';
+const CACHE = 'sseujago-v53';
 const ASSETS = ['./', './index.html', './photo-import.html', './dashboard.html', './guide.html', './privacy.html', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon-48.png', './intro.css', './intro.js', './config.js',
   './ai-recognize.js', './nav.js', './back-nav.js', './sparkle.js', './sj-dialog.js', './store.js', './intro-art.png',

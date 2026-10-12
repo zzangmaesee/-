@@ -7,10 +7,11 @@
  *  - KV에는 기기 ID별 쓰자팁 잔액·최근 내역, 출석 여부, 사용량/추정 비용 숫자만 저장합니다.
  *
  * 쓰자팁(앱 안 AI 인식 전용 포인트, 현금 교환 불가)
- *  - 처음 사용: 50 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
+ *  - 처음 사용: 100 쓰자팁(같은 인터넷 주소에서 하루 NEW_PER_IP_DAY대까지만 지급)
  *  - 출석(앱 접속): 하루 1회 1 쓰자팁, 일요일에 월~일 7일 연속이면 10 쓰자팁(한국 시간 자정 기준)
- *  - 찍자고 사진 1장: 10 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
+ *  - 찍자고 사진 1장: 5 쓰자팁 — 인식 성공 + 제품 1개 이상일 때만 차감(실패·0개는 차감 없음)
  *  - 유효기간: 적립일로부터 1년. 먼저 적립된 쓰자팁부터 사용, 1년 지난 쓰자팁은 다음 조회 때 소멸(내역에 기록)
+ *  - 일괄 재설정: RESET_ID를 바꾸면 모든 기기 잔액을 다음 접속 때 RESET_TIPS로 한 번 맞춤(베타 테스트용)
  *  - (예정) 플레이 앱 보상형 광고 시청 완료: 10 쓰자팁 — 광고 서버 검증(SSV) 연결 후
  *
  * 필요한 Cloudflare 설정
@@ -27,14 +28,16 @@
  *  - GET  /quota?deviceId=…         : (구버전 앱 호환) 지금 가능한 사진 장수
  */
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 
 const DEFAULTS = {
   MODEL: "gemini-3.1-flash-lite",
-  WELCOME_TIPS: 50,            // 처음 사용 시 지급
+  WELCOME_TIPS: 100,           // 처음 사용 시 지급
   ATTEND_TIPS: 1,              // 하루 접속(출석)
   STREAK_TIPS: 10,             // 일요일: 월~일 7일 연속 접속 시(빠진 날이 있으면 ATTEND_TIPS)
-  COST_TIPS: 10,               // 찍자고 사진 1장
+  COST_TIPS: 5,                // 찍자고 사진 1장
+  RESET_ID: "beta-2026-10-12", // 바꾸면 모든 지갑을 다음 접속 때 RESET_TIPS로 한 번 재설정(빈칸이면 안 함)
+  RESET_TIPS: 100,             // 일괄 재설정 잔액
   NEW_PER_IP_DAY: 5,           // 같은 인터넷 주소에서 하루 환영 쓰자팁 지급 최대 기기 수
   MONTHLY_KRW_CAP: 10000,      // 월 추정 비용 상한(원) — 도달 시 자동 중지
   GLOBAL_DAILY_CAP: 300,       // 전체 하루 호출 상한(무료 등급 보호·폭주 방지)
@@ -98,6 +101,8 @@ function readConfig(env) {
     attendTips: num("ATTEND_TIPS"),
     streakTips: num("STREAK_TIPS"),
     cost: Math.max(1, num("COST_TIPS")),
+    resetId: str("RESET_ID"),
+    resetTips: num("RESET_TIPS"),
     newPerIp: num("NEW_PER_IP_DAY"),
     monthlyKrwCap: num("MONTHLY_KRW_CAP"),
     globalDailyCap: num("GLOBAL_DAILY_CAP"),
@@ -211,6 +216,16 @@ async function verifyTurnstile(request, env, token) {
 async function ensureWallet(request, env, cfg, id, token) {
   let w = await loadWallet(env, id);
   if (w) {
+    // 일괄 재설정(베타): 이 지갑이 아직 이번 재설정을 받지 않았으면 잔액을 RESET_TIPS로 맞춤(지갑당 1회)
+    if (cfg.resetId && w.r !== cfg.resetId) {
+      normLots(w);
+      const before = w.b;
+      w.lots = cfg.resetTips > 0 ? [{ a: cfg.resetTips, t: Date.now() }] : [];
+      w.b = cfg.resetTips;
+      w.r = cfg.resetId;
+      await saveWallet(env, id, w, cfg.resetTips - before, `베타 테스트 쓰자팁 재설정(${cfg.resetTips})`);
+      return { w, welcome: 0, limited: false };
+    }
     const gone = expireLots(w);
     if (gone > 0) await saveWallet(env, id, w, -gone, "유효기간 만료(적립 후 1년)");
     return { w, welcome: 0, limited: false };
@@ -223,7 +238,7 @@ async function ensureWallet(request, env, cfg, id, token) {
   const ipCount = Number(await env.USAGE.get(ipKey)) || 0;
   const limited = ipCount >= cfg.newPerIp;
   const welcome = limited ? 0 : cfg.welcome;
-  w = { b: 0, c: Date.now(), lots: [] };
+  w = { b: 0, c: Date.now(), lots: [], r: cfg.resetId || undefined };
   earn(w, welcome);
   await env.USAGE.put(ipKey, String(ipCount + 1), { expirationTtl: 172800 });
   await saveWallet(env, id, w, welcome, limited ? "처음 사용(환영 지급 한도 초과)" : "처음 사용 환영 선물");
@@ -299,6 +314,7 @@ async function health(url, env, cfg, cors) {
     botCheck: !!env.TURNSTILE_SECRET,
     kvBound: !!env.USAGE,
     tips: { welcome: cfg.welcome, attend: cfg.attendTips, streak: cfg.streakTips, cost: cfg.cost },
+    resetId: cfg.resetId || null,
     monthlyKrwCap: cfg.monthlyKrwCap
   };
   if (env.USAGE) {
